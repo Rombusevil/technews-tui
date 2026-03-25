@@ -38,6 +38,7 @@ brews:
   - repository:
       owner: joeyism
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
     homepage: "https://github.com/joeyism/technews-tui"
     description: "A terminal UI for Hacker News and Reddit"
