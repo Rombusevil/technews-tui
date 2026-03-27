@@ -13,48 +13,95 @@ import (
 
 // settingsDoneMsg signals the root model that the user is done editing settings.
 type settingsDoneMsg struct {
-	subreddits []string
-	redditSort string
-	hnSort     string
+	config *config.Config
 }
 
-// Section identifies which part of settings the cursor is in.
-type settingsSection int
+type settingsRowType int
 
 const (
-	sectionSubreddits settingsSection = iota
-	sectionRedditSort
-	sectionHNSort
+	rowSourceToggle settingsRowType = iota
+	rowSourceSort
+	rowSourceTarget
 )
 
-// SettingsModel manages the subreddit + sort configuration view.
-type SettingsModel struct {
-	subreddits []string
-	redditSort string
-	hnSort     string
-	section    settingsSection // which section is focused
-	cursor     int             // subreddit list cursor (only used in sectionSubreddits)
-	input      textinput.Model
-	adding     bool // true = text input active
-	width      int
-	height     int
+type settingsRow struct {
+	sourceID  string
+	rowType   settingsRowType
+	targetIdx int // only for rowSourceTarget
 }
 
-// NewSettingsModel creates a settings view pre-populated with current config.
-func NewSettingsModel(subreddits []string, redditSort, hnSort string) SettingsModel {
-	subs := make([]string, len(subreddits))
-	copy(subs, subreddits)
+// SettingsModel manages the dynamic source configuration view.
+type SettingsModel struct {
+	cfg    *config.Config
+	rows   []settingsRow
+	cursor int
+	input  textinput.Model
+	adding bool // true = text input active for a target
+	width  int
+	height int
+}
+
+// NewSettingsModel creates a settings view from the current config.
+func NewSettingsModel(cfg *config.Config) SettingsModel {
+	// Deep copy config to allow cancelling
+	newCfg := &config.Config{
+		Sources: make(map[string]config.SourceConfig),
+	}
+	for k, v := range cfg.Sources {
+		sc := config.SourceConfig{
+			Enabled: v.Enabled,
+			Sort:    v.Sort,
+			Targets: make([]string, len(v.Targets)),
+		}
+		copy(sc.Targets, v.Targets)
+		newCfg.Sources[k] = sc
+	}
 
 	ti := textinput.New()
-	ti.Placeholder = "subreddit name"
 	ti.CharLimit = 50
 	ti.Width = 30
 
-	return SettingsModel{
-		subreddits: subs,
-		redditSort: redditSort,
-		hnSort:     hnSort,
-		input:      ti,
+	m := SettingsModel{
+		cfg:   newCfg,
+		input: ti,
+	}
+	m.rebuildRows()
+	return m
+}
+
+func (m *SettingsModel) rebuildRows() {
+	var rows []settingsRow
+
+	// Fixed order for stability
+	order := []string{"hn", "reddit", "lobsters", "lemmy", "devto"}
+
+	for _, id := range order {
+		sc, ok := m.cfg.Sources[id]
+		if !ok {
+			continue
+		}
+
+		// Row for Name + Enabled Toggle
+		rows = append(rows, settingsRow{sourceID: id, rowType: rowSourceToggle})
+
+		if sc.Enabled {
+			// Row for Sort
+			if len(config.ValidSorts[id]) > 0 {
+				rows = append(rows, settingsRow{sourceID: id, rowType: rowSourceSort})
+			}
+
+			// Rows for Targets
+			for i := range sc.Targets {
+				rows = append(rows, settingsRow{sourceID: id, rowType: rowSourceTarget, targetIdx: i})
+			}
+		}
+	}
+	m.rows = rows
+	if m.cursor >= len(m.rows) {
+		m.cursor = len(m.rows) - 1
+	}
+	if m.cursor < 0 && len(m.rows) > 0 {
+		m.cursor = 0
 	}
 }
 
@@ -81,79 +128,56 @@ func (m SettingsModel) Update(msg tea.Msg) (SettingsModel, tea.Cmd) {
 }
 
 func (m SettingsModel) updateBrowseMode(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
+	if len(m.rows) == 0 {
+		if key.Matches(msg, keys.Back) {
+			return m, func() tea.Msg { return settingsDoneMsg{config: m.cfg} }
+		}
+		return m, nil
+	}
+
+	row := m.rows[m.cursor]
+	sc := m.cfg.Sources[row.sourceID]
+
 	switch {
 	case key.Matches(msg, keys.Up):
-		m.moveCursorUp()
+		if m.cursor > 0 {
+			m.cursor--
+		}
 	case key.Matches(msg, keys.Down):
-		m.moveCursorDown()
-	case key.Matches(msg, keys.Add):
-		if m.section == sectionSubreddits {
+		if m.cursor < len(m.rows)-1 {
+			m.cursor++
+		}
+	case msg.String() == " ": // toggle enabled
+		if row.rowType == rowSourceToggle {
+			sc.Enabled = !sc.Enabled
+			m.cfg.Sources[row.sourceID] = sc
+			m.rebuildRows()
+		}
+	case msg.String() == "t": // cycle sort
+		if row.rowType == rowSourceSort {
+			sc.Sort = cycleNext(config.ValidSorts[row.sourceID], sc.Sort)
+			m.cfg.Sources[row.sourceID] = sc
+		}
+	case key.Matches(msg, keys.Add): // add target
+		if row.rowType == rowSourceToggle || row.rowType == rowSourceTarget {
 			m.adding = true
 			m.input.SetValue("")
 			m.input.Focus()
+			m.input.Placeholder = fmt.Sprintf("Add %s target", row.sourceID)
 			return m, textinput.Blink
 		}
-	case key.Matches(msg, keys.Delete):
-		if m.section == sectionSubreddits && len(m.subreddits) > 0 && m.cursor < len(m.subreddits) {
-			m.subreddits = append(m.subreddits[:m.cursor], m.subreddits[m.cursor+1:]...)
-			if m.cursor >= len(m.subreddits) && m.cursor > 0 {
-				m.cursor--
-			}
-		}
-	case msg.String() == "t":
-		// Cycle sort options
-		switch m.section {
-		case sectionRedditSort:
-			m.redditSort = cycleNext(config.RedditSorts, m.redditSort)
-		case sectionHNSort:
-			m.hnSort = cycleNext(config.HNSorts, m.hnSort)
+	case key.Matches(msg, keys.Delete): // delete target
+		if row.rowType == rowSourceTarget {
+			sc.Targets = append(sc.Targets[:row.targetIdx], sc.Targets[row.targetIdx+1:]...)
+			m.cfg.Sources[row.sourceID] = sc
+			m.rebuildRows()
 		}
 	case key.Matches(msg, keys.Back):
 		return m, func() tea.Msg {
-			return settingsDoneMsg{
-				subreddits: m.subreddits,
-				redditSort: m.redditSort,
-				hnSort:     m.hnSort,
-			}
+			return settingsDoneMsg{config: m.cfg}
 		}
 	}
 	return m, nil
-}
-
-func (m *SettingsModel) moveCursorUp() {
-	switch m.section {
-	case sectionSubreddits:
-		if m.cursor > 0 {
-			m.cursor--
-		} else {
-			// wrap up to HN sort section
-			m.section = sectionHNSort
-		}
-	case sectionRedditSort:
-		m.section = sectionSubreddits
-		if len(m.subreddits) > 0 {
-			m.cursor = len(m.subreddits) - 1
-		}
-	case sectionHNSort:
-		m.section = sectionRedditSort
-	}
-}
-
-func (m *SettingsModel) moveCursorDown() {
-	switch m.section {
-	case sectionSubreddits:
-		if m.cursor < len(m.subreddits)-1 {
-			m.cursor++
-		} else {
-			m.section = sectionRedditSort
-		}
-	case sectionRedditSort:
-		m.section = sectionHNSort
-	case sectionHNSort:
-		// wrap back to top
-		m.section = sectionSubreddits
-		m.cursor = 0
-	}
 }
 
 func (m SettingsModel) updateInputMode(msg tea.KeyMsg) (SettingsModel, tea.Cmd) {
@@ -161,10 +185,18 @@ func (m SettingsModel) updateInputMode(msg tea.KeyMsg) (SettingsModel, tea.Cmd) 
 	case "enter":
 		val := strings.TrimSpace(m.input.Value())
 		if val != "" {
-			val = strings.TrimPrefix(val, "r/")
-			val = strings.TrimPrefix(val, "/r/")
-			m.subreddits = append(m.subreddits, val)
-			m.cursor = len(m.subreddits) - 1
+			row := m.rows[m.cursor]
+			sc := m.cfg.Sources[row.sourceID]
+			sc.Targets = append(sc.Targets, val)
+			m.cfg.Sources[row.sourceID] = sc
+			m.rebuildRows()
+			// Move cursor to the new item
+			for i, r := range m.rows {
+				if r.sourceID == row.sourceID && r.rowType == rowSourceTarget && r.targetIdx == len(sc.Targets)-1 {
+					m.cursor = i
+					break
+				}
+			}
 		}
 		m.adding = false
 		m.input.Blur()
@@ -192,68 +224,69 @@ func (m SettingsModel) View() string {
 		Foreground(lipgloss.Color("241")).
 		Padding(0, 1)
 
-	// --- Subreddits section ---
-	b.WriteString(settingsTitleStyle.Render("Subreddits") + "\n\n")
+	b.WriteString(settingsTitleStyle.Render("Settings") + "\n\n")
 
-	if len(m.subreddits) == 0 {
-		b.WriteString(statusBarStyle.Render("  No subreddits. Press 'a' to add one.") + "\n")
+	if len(m.rows) == 0 {
+		b.WriteString("  No sources configured.\n")
 	} else {
-		for i, sub := range m.subreddits {
-			selected := m.section == sectionSubreddits && i == m.cursor
+		lastSource := ""
+		for i, row := range m.rows {
+			if row.sourceID != lastSource {
+				if lastSource != "" {
+					b.WriteString("\n")
+				}
+				lastSource = row.sourceID
+			}
+
+			selected := i == m.cursor && !m.adding
 			cur := "  "
 			if selected {
 				cur = selectedItemStyle.Render("> ")
 			}
-			name := fmt.Sprintf("r/%s", sub)
-			if selected {
-				name = lipgloss.NewStyle().Bold(true).Render(name)
+
+			sc := m.cfg.Sources[row.sourceID]
+
+			switch row.rowType {
+			case rowSourceToggle:
+				status := " "
+				if sc.Enabled {
+					status = "x"
+				}
+				name := strings.ToUpper(row.sourceID)
+				line := fmt.Sprintf("[%s] %s", status, name)
+				if selected {
+					line = lipgloss.NewStyle().Bold(true).Render(line)
+				}
+				b.WriteString(cur + line + "\n")
+			case rowSourceSort:
+				label := sectionLabelStyle.Render("  sort: ")
+				val := sc.Sort
+				if selected {
+					val = lipgloss.NewStyle().Bold(true).Render(val) + statusBarStyle.Render(" (t to cycle)")
+				}
+				b.WriteString(cur + label + val + "\n")
+			case rowSourceTarget:
+				target := sc.Targets[row.targetIdx]
+				prefix := "  - "
+				if row.sourceID == "reddit" {
+					prefix = "  r/"
+				}
+				line := prefix + target
+				if selected {
+					line = lipgloss.NewStyle().Bold(true).Render(line)
+				}
+				b.WriteString(cur + line + "\n")
 			}
-			b.WriteString(cur + name + "\n")
 		}
 	}
 
 	b.WriteString("\n")
 
-	// --- Add input ---
 	if m.adding {
-		b.WriteString("  Add subreddit: " + m.input.View() + "\n\n")
-	}
-
-	// --- Reddit sort section ---
-	redditSelected := m.section == sectionRedditSort && !m.adding
-	redditCur := "  "
-	if redditSelected {
-		redditCur = selectedItemStyle.Render("> ")
-	}
-	redditLabel := sectionLabelStyle.Render("Reddit sort:")
-	redditVal := lipgloss.NewStyle().Bold(redditSelected).Render(m.redditSort)
-	hint := ""
-	if redditSelected {
-		hint = statusBarStyle.Render("  (t to cycle)")
-	}
-	b.WriteString(fmt.Sprintf("%s%s %s%s\n", redditCur, redditLabel, redditVal, hint))
-
-	// --- HN sort section ---
-	hnSelected := m.section == sectionHNSort && !m.adding
-	hnCur := "  "
-	if hnSelected {
-		hnCur = selectedItemStyle.Render("> ")
-	}
-	hnLabel := sectionLabelStyle.Render("HN sort:    ")
-	hnVal := lipgloss.NewStyle().Bold(hnSelected).Render(m.hnSort)
-	hint2 := ""
-	if hnSelected {
-		hint2 = statusBarStyle.Render("  (t to cycle)")
-	}
-	b.WriteString(fmt.Sprintf("%s%s %s%s\n", hnCur, hnLabel, hnVal, hint2))
-
-	b.WriteString("\n")
-
-	// --- Footer ---
-	if m.adding {
-		b.WriteString(statusBarStyle.Render("enter confirm • esc cancel"))
+		b.WriteString("  " + m.input.View() + "\n\n")
+		b.WriteString(statusBarStyle.Render("  enter confirm • esc cancel"))
 	} else {
-		b.WriteString(statusBarStyle.Render("j/k navigate • a add • d delete • t cycle sort • esc save & back"))
+		b.WriteString(statusBarStyle.Render("  j/k navigate • space toggle • t cycle sort • a add • d delete • esc save"))
 	}
 
 	return b.String()

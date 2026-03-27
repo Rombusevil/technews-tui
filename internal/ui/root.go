@@ -36,12 +36,11 @@ type RootModel struct {
 	listModel     ListModel
 	commentModel  CommentModel
 	settingsModel SettingsModel
-	hnClient      *api.HNClient
-	redditClient  *api.RedditClient
+	sources       []api.Source
 	cfg           *config.Config
 	allPosts      []model.Post // full unfiltered set
-	sourceFilter  string       // "" = all, "HN", "r/linux", etc.
-	sources       []string     // unique source names for cycling
+	sourceFilter  string       // "" = all, "hn", "reddit", etc.
+	sourceNames   []string     // unique source IDs for cycling
 	width         int
 	height        int
 	err           error
@@ -50,13 +49,34 @@ type RootModel struct {
 }
 
 func NewRootModel(cfg *config.Config) RootModel {
-	return RootModel{
-		state:        stateList,
-		listModel:    NewListModel(),
-		hnClient:     api.NewHNClient(),
-		redditClient: api.NewRedditClient(),
-		cfg:          cfg,
-		loading:      true,
+	m := RootModel{
+		state:     stateList,
+		listModel: NewListModel(),
+		cfg:       cfg,
+		loading:   true,
+	}
+	m.rebuildSources()
+	return m
+}
+
+func (m *RootModel) rebuildSources() {
+	m.sources = []api.Source{}
+	for id, sc := range m.cfg.Sources {
+		if !sc.Enabled {
+			continue
+		}
+		switch id {
+		case "hn":
+			m.sources = append(m.sources, api.NewHNClient())
+		case "reddit":
+			m.sources = append(m.sources, api.NewRedditClient(sc.Targets))
+		case "lobsters":
+			m.sources = append(m.sources, api.NewLobstersClient())
+		case "lemmy":
+			m.sources = append(m.sources, api.NewLemmyClient(sc.Targets))
+		case "devto":
+			m.sources = append(m.sources, api.NewDevToClient())
+		}
 	}
 }
 
@@ -77,7 +97,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case postsLoadedMsg:
 		m.loading = false
 		m.allPosts = msg.posts
-		m.sources = uniqueSources(msg.posts)
+		m.sourceNames = uniqueSources(msg.posts)
 		m.applyFilter()
 		return m, nil
 
@@ -86,13 +106,12 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case settingsDoneMsg:
-		m.cfg.Subreddits = msg.subreddits
-		m.cfg.RedditSort = msg.redditSort
-		m.cfg.HNSort = msg.hnSort
+		m.cfg = msg.config
 		_ = config.Save(m.cfg)
 		m.state = stateList
 		m.loading = true
 		m.sourceFilter = "" // reset filter when sources may have changed
+		m.rebuildSources()
 		return m, m.fetchPostsCmd()
 
 	case errMsg:
@@ -176,9 +195,17 @@ func (m RootModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		browser.Open(url) //nolint:errcheck
 		return m, nil
 
+	case key.Matches(msg, keys.Comments):
+		post := m.listModel.SelectedPost()
+		if post == nil {
+			return m, nil
+		}
+		browser.Open(post.SourceURL) //nolint:errcheck
+		return m, nil
+
 	case key.Matches(msg, keys.Settings):
 		m.state = stateSettings
-		m.settingsModel = NewSettingsModel(m.cfg.Subreddits, m.cfg.RedditSort, m.cfg.HNSort)
+		m.settingsModel = NewSettingsModel(m.cfg)
 		m.settingsModel.SetSize(m.width, m.height)
 		return m, nil
 
@@ -214,6 +241,10 @@ func (m RootModel) updateComments(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			url = m.commentModel.post.SourceURL
 		}
 		browser.Open(url) //nolint:errcheck
+		return m, nil
+
+	case key.Matches(msg, keys.Comments):
+		browser.Open(m.commentModel.post.SourceURL) //nolint:errcheck
 		return m, nil
 	}
 
@@ -259,44 +290,45 @@ func (m RootModel) fetchPostsCmd() tea.Cmd {
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 
-		// Fetch HN
-		hnSort := m.cfg.HNSort
-		redditSort := m.cfg.RedditSort
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			posts, err := m.hnClient.GetPosts(hnSort, 30)
-			if err != nil {
-				return
-			}
-			mu.Lock()
-			allPosts = append(allPosts, posts...)
-			mu.Unlock()
-		}()
+		limit := 30
 
-		// Fetch each subreddit
-		for _, sub := range m.cfg.Subreddits {
+		for _, s := range m.sources {
 			wg.Add(1)
-			go func(s string) {
+			go func(source api.Source) {
 				defer wg.Done()
-				posts, err := m.redditClient.GetSubredditPosts(s, redditSort, 25)
+				sort := m.cfg.Sources[source.ID()].Sort
+
+				posts, err := source.FetchPosts(sort, limit)
 				if err != nil {
 					return
 				}
 				mu.Lock()
 				allPosts = append(allPosts, posts...)
 				mu.Unlock()
-			}(sub)
+			}(s)
 		}
 
 		wg.Wait()
 
-		// Sort by creation time, newest first
-		sort.Slice(allPosts, func(i, j int) bool {
-			return allPosts[i].CreatedAt.After(allPosts[j].CreatedAt)
+		// Deduplicate by URL
+		seenURLs := make(map[string]bool)
+		var uniquePosts []model.Post
+		for _, p := range allPosts {
+			if p.URL != "" {
+				if seenURLs[p.URL] {
+					continue
+				}
+				seenURLs[p.URL] = true
+			}
+			uniquePosts = append(uniquePosts, p)
+		}
+
+		// Sort by rank, then preserve source order
+		sort.SliceStable(uniquePosts, func(i, j int) bool {
+			return uniquePosts[i].Rank < uniquePosts[j].Rank
 		})
 
-		return postsLoadedMsg{allPosts}
+		return postsLoadedMsg{uniquePosts}
 	}
 }
 
@@ -316,20 +348,29 @@ func (m *RootModel) applyFilter() {
 		m.listModel.SetPosts(filtered)
 		m.listModel.SetTitle("Tech News [" + m.sourceFilter + "]")
 	}
+
+	var sorts []SortInfo
+	for _, s := range m.sources {
+		sorts = append(sorts, SortInfo{
+			Name: s.Name(),
+			Sort: m.cfg.Sources[s.ID()].Sort,
+		})
+	}
+	m.listModel.SetSortInfo(sorts)
 }
 
 func (m *RootModel) cycleFilter() {
-	if len(m.sources) == 0 {
+	if len(m.sourceNames) == 0 {
 		return
 	}
 	if m.sourceFilter == "" {
-		m.sourceFilter = m.sources[0]
+		m.sourceFilter = m.sourceNames[0]
 	} else {
 		found := false
-		for i, s := range m.sources {
+		for i, s := range m.sourceNames {
 			if s == m.sourceFilter {
-				if i+1 < len(m.sources) {
-					m.sourceFilter = m.sources[i+1]
+				if i+1 < len(m.sourceNames) {
+					m.sourceFilter = m.sourceNames[i+1]
 				} else {
 					m.sourceFilter = "" // wrap back to All
 				}
@@ -362,14 +403,19 @@ func (m RootModel) fetchCommentsCmd(post model.Post) tea.Cmd {
 		var comments []model.Comment
 		var err error
 
-		switch {
-		case post.CommentURL != "":
-			// Reddit-style: fetch via URL
-			comments, err = m.redditClient.GetComments(post.CommentURL, 3)
-		default:
-			// HN-style: fetch via comment IDs
-			comments, err = m.hnClient.GetComments(post.CommentIDs, 3)
+		var source api.Source
+		for _, s := range m.sources {
+			if s.ID() == post.Source {
+				source = s
+				break
+			}
 		}
+
+		if source == nil {
+			return errMsg{fmt.Errorf("source not found: %s", post.Source)}
+		}
+
+		comments, err = source.FetchComments(post, 3)
 
 		if err != nil {
 			return errMsg{err}

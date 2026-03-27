@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -46,8 +47,19 @@ func NewHNClient() *HNClient {
 	}
 }
 
-// GetPosts fetches N stories from HN using the given sort (top, new, best).
-func (c *HNClient) GetPosts(sort string, limit int) ([]model.Post, error) {
+// ID returns "hn".
+func (c *HNClient) ID() string { return "hn" }
+
+// Name returns "HN".
+func (c *HNClient) Name() string { return "HN" }
+
+// SortOptions returns valid sorts for HN.
+func (c *HNClient) SortOptions() []string {
+	return []string{"top", "new", "best"}
+}
+
+// FetchPosts fetches stories from HN using the given sort (top, new, best).
+func (c *HNClient) FetchPosts(sort string, limit int) ([]model.Post, error) {
 	endpoint := hnTopStories
 	switch sort {
 	case "new":
@@ -58,16 +70,24 @@ func (c *HNClient) GetPosts(sort string, limit int) ([]model.Post, error) {
 	return c.fetchStories(endpoint, limit)
 }
 
-// GetTopPosts fetches the top N stories from HN (kept for backwards compat).
-func (c *HNClient) GetTopPosts(limit int) ([]model.Post, error) {
-	return c.fetchStories(hnTopStories, limit)
+// FetchComments fetches the comment tree for a post.
+func (c *HNClient) FetchComments(post model.Post, maxDepth int) ([]model.Comment, error) {
+	id, err := strconv.Atoi(post.SourceID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid HN ID: %s", post.SourceID)
+	}
+	item, err := c.fetchItem(id)
+	if err != nil {
+		return nil, err
+	}
+	return c.fetchCommentTree(item.Kids, 0, maxDepth)
 }
 
 func (c *HNClient) fetchStories(endpoint string, limit int) ([]model.Post, error) {
 	// 1. Fetch story IDs
 	resp, err := c.http.Get(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("fetching top stories: %w", err)
+		return nil, fmt.Errorf("fetching stories: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -108,17 +128,17 @@ func (c *HNClient) fetchStories(endpoint string, limit int) ([]model.Post, error
 
 			sourceURL := fmt.Sprintf("https://news.ycombinator.com/item?id=%d", item.ID)
 			posts[idx] = model.Post{
-				ID:           item.ID,
+				ID:           fmt.Sprintf("%d", item.ID),
 				Title:        item.Title,
 				URL:          item.URL,
 				SourceURL:    sourceURL,
 				Author:       item.By,
 				Points:       item.Score,
 				CommentCount: item.Descendants,
-				Source:       "HN",
+				Source:       "hn",
 				SourceID:     fmt.Sprintf("%d", item.ID),
 				CreatedAt:    time.Unix(item.Time, 0),
-				CommentIDs:   item.Kids,
+				Rank:         idx,
 				Text:         StripHTML(item.Text),
 			}
 		}(i, id)
@@ -128,18 +148,14 @@ func (c *HNClient) fetchStories(endpoint string, limit int) ([]model.Post, error
 	// Filter out zero-value posts (deleted/dead items left a zero slot)
 	var result []model.Post
 	for _, p := range posts {
-		if p.ID != 0 {
+		if p.ID != "" {
 			result = append(result, p)
 		}
 	}
 	return result, nil
 }
 
-// GetComments fetches the comment tree for a post up to maxDepth levels deep.
-func (c *HNClient) GetComments(ids []int, maxDepth int) ([]model.Comment, error) {
-	return c.fetchCommentTree(ids, 0, maxDepth)
-}
-
+// fetchCommentTree fetches the comment tree for a list of child IDs.
 func (c *HNClient) fetchCommentTree(ids []int, depth, maxDepth int) ([]model.Comment, error) {
 	if depth >= maxDepth || len(ids) == 0 {
 		return nil, nil
@@ -165,7 +181,7 @@ func (c *HNClient) fetchCommentTree(ids []int, depth, maxDepth int) ([]model.Com
 			children, _ := c.fetchCommentTree(item.Kids, depth+1, maxDepth)
 
 			comments[idx] = model.Comment{
-				ID:        item.ID,
+				ID:        fmt.Sprintf("%d", item.ID),
 				Author:    item.By,
 				Text:      StripHTML(item.Text),
 				CreatedAt: time.Unix(item.Time, 0),

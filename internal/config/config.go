@@ -7,21 +7,44 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Config holds the application configuration.
-type Config struct {
-	Subreddits []string `yaml:"subreddits"`
-	RedditSort string   `yaml:"reddit_sort"` // hot, new, top, rising
-	HNSort     string   `yaml:"hn_sort"`     // top, new, best
+// SourceConfig holds settings for a specific content source.
+type SourceConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	Sort    string   `yaml:"sort"`
+	Targets []string `yaml:"targets,omitempty"` // subreddits, lemmy instances, etc.
 }
 
-// Valid sort options
+// Config holds the application configuration.
+type Config struct {
+	Sources map[string]SourceConfig `yaml:"sources"`
+}
+
+// Valid sort options per source
+var ValidSorts = map[string][]string{
+	"hn":       {"top", "new", "best"},
+	"reddit":   {"hot", "new", "top", "rising"},
+	"lobsters": {"hottest", "newest"},
+	"lemmy":    {"Hot", "New", "Active", "TopDay", "TopWeek", "TopAll"},
+	"devto":    {"default", "latest", "top", "rising"},
+}
+
+// Registry for backwards compatibility with existing UI code if needed
 var (
-	RedditSorts = []string{"hot", "new", "top", "rising"}
-	HNSorts     = []string{"top", "new", "best"}
+	RedditSorts = ValidSorts["reddit"]
+	HNSorts     = ValidSorts["hn"]
 )
 
 // DefaultSubreddits is the default list of subreddits to fetch.
 var DefaultSubreddits = []string{"programming", "linux", "opencodecli", "claudecode"}
+
+// Path returns the path to the config file.
+func Path() string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "(unknown)"
+	}
+	return filepath.Join(configDir, "technews-tui", "config.yaml")
+}
 
 // Load reads the config from ~/.config/technews-tui/config.yaml.
 // If the file doesn't exist, it creates one with defaults.
@@ -42,13 +65,36 @@ func Load() (*Config, error) {
 		return cfg, nil
 	}
 
+	// Try to detect old flat format first
+	var oldFormat struct {
+		Subreddits []string `yaml:"subreddits"`
+		RedditSort string   `yaml:"reddit_sort"`
+		HNSort     string   `yaml:"hn_sort"`
+	}
+	if err := yaml.Unmarshal(data, &oldFormat); err == nil && len(oldFormat.Subreddits) > 0 {
+		// Migration
+		cfg := defaultConfig()
+		cfg.Sources["reddit"] = SourceConfig{
+			Enabled: true,
+			Sort:    oldFormat.RedditSort,
+			Targets: oldFormat.Subreddits,
+		}
+		cfg.Sources["hn"] = SourceConfig{
+			Enabled: true,
+			Sort:    oldFormat.HNSort,
+		}
+		cfg.ValidateSort()
+		_ = Save(cfg) // Update file to new format
+		return cfg, nil
+	}
+
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return defaultConfig(), nil
 	}
 
-	if len(cfg.Subreddits) == 0 {
-		cfg.Subreddits = DefaultSubreddits
+	if len(cfg.Sources) == 0 {
+		cfg = *defaultConfig()
 	}
 	cfg.ValidateSort()
 	return &cfg, nil
@@ -67,19 +113,44 @@ func Save(cfg *Config) error {
 
 func defaultConfig() *Config {
 	return &Config{
-		Subreddits: DefaultSubreddits,
-		RedditSort: "hot",
-		HNSort:     "top",
+		Sources: map[string]SourceConfig{
+			"hn": {
+				Enabled: true,
+				Sort:    "top",
+			},
+			"reddit": {
+				Enabled: true,
+				Sort:    "hot",
+				Targets: DefaultSubreddits,
+			},
+			"lobsters": {
+				Enabled: true,
+				Sort:    "hottest",
+			},
+			"lemmy": {
+				Enabled: true,
+				Sort:    "Hot",
+				Targets: []string{"lemmy.ml", "programming.dev"},
+			},
+			"devto": {
+				Enabled: true,
+				Sort:    "default",
+			},
+		},
 	}
 }
 
 // ValidateSort ensures sort values are valid, resetting to defaults if not.
 func (c *Config) ValidateSort() {
-	if !contains(RedditSorts, c.RedditSort) {
-		c.RedditSort = "hot"
-	}
-	if !contains(HNSorts, c.HNSort) {
-		c.HNSort = "top"
+	for id, sc := range c.Sources {
+		valid, ok := ValidSorts[id]
+		if !ok {
+			continue
+		}
+		if !contains(valid, sc.Sort) {
+			sc.Sort = valid[0]
+			c.Sources[id] = sc
+		}
 	}
 }
 
@@ -100,6 +171,6 @@ func writeDefault(dir, path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	header := []byte("# technews-tui configuration\n# Add or remove subreddits below.\n\n")
+	header := []byte("# technews-tui configuration\n# Manage your sources and preferences below.\n\n")
 	return os.WriteFile(path, append(header, data...), 0o644)
 }

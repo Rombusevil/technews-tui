@@ -67,6 +67,7 @@ var listHelpEntries = []helpEntry{
 	{"↑/↓  j/k", "navigate"},
 	{"enter", "view comments"},
 	{"o", "open in browser"},
+	{"c", "open comments link"},
 	{"tab", "cycle source filter"},
 	{"r", "refresh"},
 	{"s", "settings"},
@@ -79,6 +80,7 @@ var commentHelpEntries = []helpEntry{
 	{"ctrl+u / ctrl+d", "half page up/down"},
 	{"enter / space", "fold/unfold thread"},
 	{"o", "open in browser"},
+	{"c", "open comments link"},
 	{"esc / q", "back to list"},
 	{"?", "close help"},
 }

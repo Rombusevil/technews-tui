@@ -8,6 +8,10 @@ var (
 			Bold(true).
 			Padding(0, 1)
 
+	subtitleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			Padding(0, 1)
+
 	statusBarStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			Padding(0, 1)

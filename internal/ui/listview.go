@@ -2,10 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"technews-tui/internal/model"
 )
 
@@ -18,26 +20,51 @@ func (i postItem) Title() string       { return i.post.Title }
 func (i postItem) FilterValue() string { return i.post.Title }
 func (i postItem) Description() string {
 	age := timeAgo(i.post.CreatedAt)
+	label := i.post.Source
+	if i.post.SourceLabel != "" {
+		label = i.post.SourceLabel
+	}
 	return fmt.Sprintf("%s  ▲ %d  %s  %d comments  %s",
-		sourceTagStyle.Render(i.post.Source), i.post.Points, i.post.Author, i.post.CommentCount, age)
+		sourceTagStyle.Render(label), i.post.Points, i.post.Author, i.post.CommentCount, age)
+}
+
+type SortInfo struct {
+	Name string
+	Sort string
 }
 
 // ListModel manages the story list view.
 type ListModel struct {
-	list   list.Model
-	posts  []model.Post
-	width  int
-	height int
+	list      list.Model
+	posts     []model.Post
+	width     int
+	height    int
+	baseTitle string
+	sorts     []SortInfo
 }
 
 func NewListModel() ListModel {
 	delegate := list.NewDefaultDelegate()
 	l := list.New([]list.Item{}, delegate, 0, 0)
-	l.Title = "Tech News"
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(true)
-	l.Styles.Title = titleStyle
-	return ListModel{list: l}
+	l.Styles.Title = lipgloss.NewStyle() // styles embedded in Title string directly
+	m := ListModel{list: l, baseTitle: "Tech News"}
+	m.updateTitle()
+	return m
+}
+
+func (m *ListModel) updateTitle() {
+	title := titleStyle.Render(m.baseTitle)
+	if len(m.sorts) > 0 {
+		var lines []string
+		for _, s := range m.sorts {
+			lines = append(lines, fmt.Sprintf("%s: %s", s.Name, s.Sort))
+		}
+		sortLine := strings.Join(lines, "  ·  ")
+		title += "\n" + subtitleStyle.Render(sortLine)
+	}
+	m.list.Title = title
 }
 
 func (m *ListModel) SetSize(w, h int) {
@@ -47,7 +74,13 @@ func (m *ListModel) SetSize(w, h int) {
 }
 
 func (m *ListModel) SetTitle(title string) {
-	m.list.Title = title
+	m.baseTitle = title
+	m.updateTitle()
+}
+
+func (m *ListModel) SetSortInfo(sorts []SortInfo) {
+	m.sorts = sorts
+	m.updateTitle()
 }
 
 func (m *ListModel) SetPosts(posts []model.Post) {

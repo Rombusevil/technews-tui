@@ -2,14 +2,14 @@ package api
 
 import "testing"
 
-func TestHNClient_GetTopPosts(t *testing.T) {
+func TestHNClient_FetchPosts(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	client := NewHNClient()
-	posts, err := client.GetTopPosts(5)
+	posts, err := client.FetchPosts("top", 5)
 	if err != nil {
-		t.Fatalf("GetTopPosts failed: %v", err)
+		t.Fatalf("FetchPosts failed: %v", err)
 	}
 	if len(posts) == 0 {
 		t.Fatal("expected at least one post")
@@ -17,8 +17,8 @@ func TestHNClient_GetTopPosts(t *testing.T) {
 	if posts[0].Title == "" {
 		t.Error("expected post to have a title")
 	}
-	if posts[0].Source != "HN" {
-		t.Errorf("expected source HN, got %q", posts[0].Source)
+	if posts[0].Source != "hn" {
+		t.Errorf("expected source hn, got %q", posts[0].Source)
 	}
 }
 

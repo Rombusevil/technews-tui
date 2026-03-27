@@ -25,7 +25,7 @@ type CommentModel struct {
 	post         model.Post
 	allComments  []model.Comment
 	flat         []flatComment
-	collapsedIDs map[int]bool
+	collapsedIDs map[string]bool
 	cursor       int
 	offset       int
 	width        int
@@ -37,7 +37,7 @@ func NewCommentModel(post model.Post) CommentModel {
 	return CommentModel{
 		post:         post,
 		loading:      true,
-		collapsedIDs: make(map[int]bool),
+		collapsedIDs: make(map[string]bool),
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"technews-tui/internal/model"
@@ -55,14 +56,75 @@ type redditComment struct {
 
 // RedditClient fetches data from Reddit's public JSON API.
 type RedditClient struct {
-	http *http.Client
+	http       *http.Client
+	subreddits []string
 }
 
 // NewRedditClient creates a new Reddit API client.
-func NewRedditClient() *RedditClient {
+func NewRedditClient(subreddits []string) *RedditClient {
 	return &RedditClient{
-		http: &http.Client{Timeout: 15 * time.Second},
+		http:       &http.Client{Timeout: 15 * time.Second},
+		subreddits: subreddits,
 	}
+}
+
+// ID returns "reddit".
+func (c *RedditClient) ID() string { return "reddit" }
+
+// Name returns "Reddit".
+func (c *RedditClient) Name() string { return "Reddit" }
+
+// SortOptions returns valid sorts for Reddit.
+func (c *RedditClient) SortOptions() []string {
+	return []string{"hot", "new", "top", "rising"}
+}
+
+// FetchPosts fetches posts from all configured subreddits.
+func (c *RedditClient) FetchPosts(sort string, limit int) ([]model.Post, error) {
+	var allPosts []model.Post
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, sub := range c.subreddits {
+		wg.Add(1)
+		go func(s string) {
+			defer wg.Done()
+			posts, err := c.fetchSubredditPosts(s, sort, limit)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			allPosts = append(allPosts, posts...)
+			mu.Unlock()
+		}(sub)
+	}
+	wg.Wait()
+	return allPosts, nil
+}
+
+// FetchComments fetches the comment tree for a Reddit post.
+func (c *RedditClient) FetchComments(post model.Post, maxDepth int) ([]model.Comment, error) {
+	// SourceID for Reddit is the JSON comment URL
+	resp, err := c.redditGet(post.SourceID)
+	if err != nil {
+		return nil, fmt.Errorf("fetching comments: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("comments returned status %d", resp.StatusCode)
+	}
+
+	var listings []redditListing
+	if err := json.NewDecoder(resp.Body).Decode(&listings); err != nil {
+		return nil, fmt.Errorf("decoding comments: %w", err)
+	}
+
+	if len(listings) < 2 {
+		return nil, nil
+	}
+
+	return parseRedditComments(listings[1].Data.Children, 0, maxDepth), nil
 }
 
 func (c *RedditClient) redditGet(url string) (*http.Response, error) {
@@ -74,8 +136,7 @@ func (c *RedditClient) redditGet(url string) (*http.Response, error) {
 	return c.http.Do(req)
 }
 
-// GetSubredditPosts fetches posts from a subreddit using the given sort (hot, new, top, rising).
-func (c *RedditClient) GetSubredditPosts(subreddit, sort string, limit int) ([]model.Post, error) {
+func (c *RedditClient) fetchSubredditPosts(subreddit, sort string, limit int) ([]model.Post, error) {
 	if sort == "" {
 		sort = "hot"
 	}
@@ -96,7 +157,7 @@ func (c *RedditClient) GetSubredditPosts(subreddit, sort string, limit int) ([]m
 	}
 
 	var posts []model.Post
-	for _, child := range listing.Data.Children {
+	for i, child := range listing.Data.Children {
 		if child.Kind != "t3" {
 			continue
 		}
@@ -117,46 +178,22 @@ func (c *RedditClient) GetSubredditPosts(subreddit, sort string, limit int) ([]m
 			redditBaseURL, rp.Subreddit, rp.ID)
 
 		posts = append(posts, model.Post{
-			ID:           0, // Reddit uses string IDs
+			ID:           rp.ID,
 			Title:        rp.Title,
 			URL:          articleURL,
 			SourceURL:    sourceURL,
 			Author:       rp.Author,
 			Points:       rp.Score,
 			CommentCount: rp.NumComments,
-			Source:       fmt.Sprintf("r/%s", rp.Subreddit),
-			SourceID:     rp.ID,
+			Source:       "reddit",
+			SourceLabel:  fmt.Sprintf("r/%s", rp.Subreddit),
+			SourceID:     commentURL,
 			CreatedAt:    time.Unix(int64(rp.CreatedUTC), 0),
-			CommentURL:   commentURL,
+			Rank:         i,
 			Text:         cleanRedditBody(rp.Selftext),
 		})
 	}
 	return posts, nil
-}
-
-// GetComments fetches the comment tree for a Reddit post via its comment URL.
-func (c *RedditClient) GetComments(commentURL string, maxDepth int) ([]model.Comment, error) {
-	resp, err := c.redditGet(commentURL)
-	if err != nil {
-		return nil, fmt.Errorf("fetching comments: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("comments returned status %d", resp.StatusCode)
-	}
-
-	// Reddit returns a 2-element JSON array: [post_listing, comments_listing]
-	var listings []redditListing
-	if err := json.NewDecoder(resp.Body).Decode(&listings); err != nil {
-		return nil, fmt.Errorf("decoding comments: %w", err)
-	}
-
-	if len(listings) < 2 {
-		return nil, nil
-	}
-
-	return parseRedditComments(listings[1].Data.Children, 0, maxDepth), nil
 }
 
 func parseRedditComments(children []redditChild, depth, maxDepth int) []model.Comment {
@@ -192,7 +229,7 @@ func parseRedditComments(children []redditChild, depth, maxDepth int) []model.Co
 		text := cleanRedditBody(rc.Body)
 
 		comments = append(comments, model.Comment{
-			ID:        0,
+			ID:        rc.ID,
 			Author:    rc.Author,
 			Text:      text,
 			CreatedAt: time.Unix(int64(rc.CreatedUTC), 0),

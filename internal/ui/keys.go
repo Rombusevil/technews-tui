@@ -17,12 +17,17 @@ type keyMap struct {
 	Delete   key.Binding
 	Filter   key.Binding
 	Help     key.Binding
+	Comments key.Binding
 }
 
 var keys = keyMap{
 	Open: key.NewBinding(
 		key.WithKeys("o"),
 		key.WithHelp("o", "open"),
+	),
+	Comments: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "comments link"),
 	),
 	Back: key.NewBinding(
 		key.WithKeys("esc"),
