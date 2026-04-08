@@ -8,12 +8,15 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"technews-tui/internal/bookmark"
 	"technews-tui/internal/model"
 )
 
 // postItem wraps model.Post to satisfy list.Item and list.DefaultItem.
 type postItem struct {
-	post model.Post
+	post       model.Post
+	bookmarked bool
 }
 
 func (i postItem) Title() string       { return i.post.Title }
@@ -24,8 +27,12 @@ func (i postItem) Description() string {
 	if i.post.SourceLabel != "" {
 		label = i.post.SourceLabel
 	}
-	return fmt.Sprintf("%s  ▲ %d  %s  %d comments  %s",
-		sourceTagStyle.Render(label), i.post.Points, i.post.Author, i.post.CommentCount, age)
+	star := ""
+	if i.bookmarked {
+		star = "★ "
+	}
+	return fmt.Sprintf("%s%s  ▲ %d  %s  %d comments  %s",
+		star, sourceTagStyle.Render(label), i.post.Points, i.post.Author, i.post.CommentCount, age)
 }
 
 type SortInfo struct {
@@ -35,21 +42,22 @@ type SortInfo struct {
 
 // ListModel manages the story list view.
 type ListModel struct {
-	list      list.Model
-	posts     []model.Post
-	width     int
-	height    int
-	baseTitle string
-	sorts     []SortInfo
+	list          list.Model
+	posts         []model.Post
+	bookmarkStore *bookmark.Store
+	width         int
+	height        int
+	baseTitle     string
+	sorts         []SortInfo
 }
 
-func NewListModel() ListModel {
+func NewListModel(store *bookmark.Store) ListModel {
 	delegate := list.NewDefaultDelegate()
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(true)
 	l.Styles.Title = lipgloss.NewStyle() // styles embedded in Title string directly
-	m := ListModel{list: l, baseTitle: "Tech News"}
+	m := ListModel{list: l, baseTitle: "Tech News", bookmarkStore: store}
 	m.updateTitle()
 	return m
 }
@@ -87,7 +95,11 @@ func (m *ListModel) SetPosts(posts []model.Post) {
 	m.posts = posts
 	items := make([]list.Item, len(posts))
 	for i, p := range posts {
-		items[i] = postItem{post: p}
+		bookmarked := false
+		if m.bookmarkStore != nil {
+			bookmarked = m.bookmarkStore.Has(p.SourceURL)
+		}
+		items[i] = postItem{post: p, bookmarked: bookmarked}
 	}
 	m.list.SetItems(items)
 }

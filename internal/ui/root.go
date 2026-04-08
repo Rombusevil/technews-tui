@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"technews-tui/internal/api"
+	"technews-tui/internal/bookmark"
 	"technews-tui/internal/browser"
 	"technews-tui/internal/config"
 	"technews-tui/internal/model"
@@ -19,6 +20,7 @@ const (
 	stateList viewState = iota
 	stateComments
 	stateSettings
+	stateBookmarks
 )
 
 // --- Messages ---
@@ -36,6 +38,8 @@ type RootModel struct {
 	listModel     ListModel
 	commentModel  CommentModel
 	settingsModel SettingsModel
+	bookmarkModel BookmarkModel
+	bookmarkStore *bookmark.Store
 	sources       []api.Source
 	cfg           *config.Config
 	allPosts      []model.Post // full unfiltered set
@@ -49,11 +53,15 @@ type RootModel struct {
 }
 
 func NewRootModel(cfg *config.Config) RootModel {
+	store := bookmark.NewStore(bookmark.DefaultPath())
+	_ = store.Load()
+
 	m := RootModel{
-		state:     stateList,
-		listModel: NewListModel(),
-		cfg:       cfg,
-		loading:   true,
+		state:         stateList,
+		listModel:     NewListModel(store),
+		bookmarkStore: store,
+		cfg:           cfg,
+		loading:       true,
 	}
 	m.rebuildSources()
 	return m
@@ -114,6 +122,12 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuildSources()
 		return m, m.fetchPostsCmd()
 
+	case bookmarkDoneMsg:
+		m.state = stateList
+		m.listModel.SetPosts(m.allPosts) // Triggers re-render of ★ indicator
+		m.applyFilter()
+		return m, nil
+
 	case errMsg:
 		m.err = msg.err
 		m.loading = false
@@ -146,6 +160,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateComments(msg)
 		case stateSettings:
 			return m.updateSettings(msg)
+		case stateBookmarks:
+			return m.updateBookmarks(msg)
 		}
 	}
 
@@ -162,6 +178,12 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateSettings:
 		var cmd tea.Cmd
 		m.settingsModel, cmd = m.settingsModel.Update(msg)
+		return m, cmd
+	case stateBookmarks:
+		var cmd tea.Cmd
+		var mdl tea.Model
+		mdl, cmd = m.bookmarkModel.Update(msg)
+		m.bookmarkModel = mdl.(BookmarkModel)
 		return m, cmd
 	}
 
@@ -180,6 +202,7 @@ func (m RootModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.state = stateComments
 		m.commentModel = NewCommentModel(*post)
+		m.commentModel.SetBookmarked(m.bookmarkStore.Has(post.SourceURL))
 		m.commentModel.SetSize(m.width, m.height)
 		return m, m.fetchCommentsCmd(*post)
 
@@ -201,6 +224,34 @@ func (m RootModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		browser.Open(post.SourceURL) //nolint:errcheck
+		return m, nil
+
+	case key.Matches(msg, keys.Bookmark):
+		post := m.listModel.SelectedPost()
+		if post == nil {
+			return m, nil
+		}
+		b := bookmark.Bookmark{
+			Kind:         "post",
+			Title:        post.Title,
+			URL:          post.URL,
+			SourceURL:    post.SourceURL,
+			Source:       post.Source,
+			SourceLabel:  post.SourceLabel,
+			SourceID:     post.SourceID,
+			Author:       post.Author,
+			Points:       post.Points,
+			CommentCount: post.CommentCount,
+		}
+		_, _ = m.bookmarkStore.Toggle(b)
+		// Force list refresh to update ★
+		m.listModel.SetPosts(m.listModel.posts)
+		return m, nil
+
+	case key.Matches(msg, keys.Bookmarks):
+		m.state = stateBookmarks
+		m.bookmarkModel = NewBookmarkModel(m.bookmarkStore)
+		m.bookmarkModel.SetSize(m.width, m.height)
 		return m, nil
 
 	case key.Matches(msg, keys.Settings):
@@ -229,10 +280,26 @@ func (m RootModel) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m RootModel) updateBookmarks(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	var mdl tea.Model
+	mdl, cmd = m.bookmarkModel.Update(msg)
+	m.bookmarkModel = mdl.(BookmarkModel)
+	return m, cmd
+}
+
 func (m RootModel) updateComments(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Let search mode intercept keys first
+	if m.commentModel.searchMode != searchModeNone {
+		var cmd tea.Cmd
+		m.commentModel, cmd = m.commentModel.Update(msg)
+		return m, cmd
+	}
+
 	switch {
 	case key.Matches(msg, keys.Back), key.Matches(msg, keys.Quit):
 		m.state = stateList
+		m.listModel.SetPosts(m.listModel.posts) // Re-render in case bookmark changed
 		return m, nil
 
 	case key.Matches(msg, keys.Open):
@@ -245,6 +312,23 @@ func (m RootModel) updateComments(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Comments):
 		browser.Open(m.commentModel.post.SourceURL) //nolint:errcheck
+		return m, nil
+
+	case key.Matches(msg, keys.Bookmark):
+		b := bookmark.Bookmark{
+			Kind:         "post",
+			Title:        m.commentModel.post.Title,
+			URL:          m.commentModel.post.URL,
+			SourceURL:    m.commentModel.post.SourceURL,
+			Source:       m.commentModel.post.Source,
+			SourceLabel:  m.commentModel.post.SourceLabel,
+			SourceID:     m.commentModel.post.SourceID,
+			Author:       m.commentModel.post.Author,
+			Points:       m.commentModel.post.Points,
+			CommentCount: m.commentModel.post.CommentCount,
+		}
+		added, _ := m.bookmarkStore.Toggle(b)
+		m.commentModel.SetBookmarked(added)
 		return m, nil
 	}
 
@@ -267,6 +351,8 @@ func (m RootModel) View() string {
 			return renderHelp("Comment View", commentHelpEntries, m.width, m.height)
 		case stateSettings:
 			return renderHelp("Settings", settingsHelpEntries, m.width, m.height)
+		case stateBookmarks:
+			return renderHelp("Bookmarks", bookmarkHelpEntries, m.width, m.height)
 		default:
 			return renderHelp("Tech News TUI", listHelpEntries, m.width, m.height)
 		}
@@ -277,6 +363,8 @@ func (m RootModel) View() string {
 		return m.commentModel.View()
 	case stateSettings:
 		return m.settingsModel.View()
+	case stateBookmarks:
+		return m.bookmarkModel.View()
 	default:
 		return m.listModel.View()
 	}

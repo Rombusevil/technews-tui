@@ -21,17 +21,33 @@ type flatComment struct {
 	collapsed   bool
 }
 
+type searchMode int
+
+const (
+	searchModeNone   searchMode = iota // normal navigation
+	searchModeTyping                   // input active
+	searchModeActive                   // query submitted, highlights visible
+)
+
 type CommentModel struct {
 	post         model.Post
 	allComments  []model.Comment
 	flat         []flatComment
 	collapsedIDs map[string]bool
+	bookmarked   bool
 	bodyExpanded bool
 	cursor       int
 	offset       int
 	width        int
 	height       int
 	loading      bool
+
+	// Search
+	searchMode   searchMode
+	searchQuery  string
+	searchInput  string // raw chars typed so far (in searchModeTyping)
+	matchIndices []int  // flat indices that contain a match
+	matchCursor  int    // which match is current (-1 = none)
 }
 
 func NewCommentModel(post model.Post) CommentModel {
@@ -40,6 +56,10 @@ func NewCommentModel(post model.Post) CommentModel {
 		loading:      true,
 		collapsedIDs: make(map[string]bool),
 	}
+}
+
+func (m *CommentModel) SetBookmarked(bookmarked bool) {
+	m.bookmarked = bookmarked
 }
 
 func (m *CommentModel) SetSize(w, h int) {
@@ -91,47 +111,124 @@ func countDescendants(c model.Comment) int {
 func (m CommentModel) Update(msg tea.Msg) (CommentModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, keys.ExpandBody):
-			m.bodyExpanded = !m.bodyExpanded
-			m.flatten() // Re-flatten to adjust offset if needed, though not strictly necessary for header
-		case key.Matches(msg, keys.Up):
-			if m.cursor > 0 {
-				m.cursor--
-			}
-		case key.Matches(msg, keys.Down):
-			if m.cursor < len(m.flat)-1 {
-				m.cursor++
-			}
-		case key.Matches(msg, keys.Toggle):
-			if m.cursor >= 0 && m.cursor < len(m.flat) {
-				fc := m.flat[m.cursor]
-				if fc.hasChildren {
-					m.collapsedIDs[fc.comment.ID] = !m.collapsedIDs[fc.comment.ID]
-					m.flatten()
-				}
-			}
-		case key.Matches(msg, keys.HalfUp):
-			half := len(m.flat) / 2
-			if half < 1 {
-				half = 1
-			}
-			m.cursor -= half
-			if m.cursor < 0 {
-				m.cursor = 0
-			}
-		case key.Matches(msg, keys.HalfDown):
-			half := len(m.flat) / 2
-			if half < 1 {
-				half = 1
-			}
-			m.cursor += half
-			if m.cursor >= len(m.flat) {
-				m.cursor = len(m.flat) - 1
-			}
+		switch m.searchMode {
+		case searchModeTyping:
+			return m.updateSearchTyping(msg)
+		case searchModeActive:
+			return m.updateSearchActive(msg)
+		default:
+			return m.updateNormal(msg)
 		}
 	}
 	m.ensureCursorVisible()
+	return m, nil
+}
+
+func (m CommentModel) updateNormal(msg tea.KeyMsg) (CommentModel, tea.Cmd) {
+	switch {
+	case msg.String() == "/":
+		m.searchMode = searchModeTyping
+		m.searchInput = ""
+	case key.Matches(msg, keys.ExpandBody):
+		m.bodyExpanded = !m.bodyExpanded
+		m.flatten()
+	case key.Matches(msg, keys.Up):
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case key.Matches(msg, keys.Down):
+		if m.cursor < len(m.flat)-1 {
+			m.cursor++
+		}
+	case key.Matches(msg, keys.Toggle):
+		if m.cursor >= 0 && m.cursor < len(m.flat) {
+			fc := m.flat[m.cursor]
+			if fc.hasChildren {
+				m.collapsedIDs[fc.comment.ID] = !m.collapsedIDs[fc.comment.ID]
+				m.flatten()
+			}
+		}
+	case key.Matches(msg, keys.HalfUp):
+		half := len(m.flat) / 2
+		if half < 1 {
+			half = 1
+		}
+		m.cursor -= half
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+	case key.Matches(msg, keys.HalfDown):
+		half := len(m.flat) / 2
+		if half < 1 {
+			half = 1
+		}
+		m.cursor += half
+		if m.cursor >= len(m.flat) {
+			m.cursor = len(m.flat) - 1
+		}
+	}
+	m.ensureCursorVisible()
+	return m, nil
+}
+
+func (m CommentModel) updateSearchTyping(msg tea.KeyMsg) (CommentModel, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
+		m.searchQuery = m.searchInput
+		m.computeMatches(m.searchQuery)
+		if len(m.matchIndices) > 0 {
+			m.searchMode = searchModeActive
+			m.matchCursor = 0
+			m.cursor = m.matchIndices[0]
+			m.ensureCursorVisible()
+		} else {
+			m.searchMode = searchModeActive // still active, just no matches
+		}
+	case "esc":
+		m.searchMode = searchModeNone
+		m.searchInput = ""
+		m.searchQuery = ""
+		m.matchIndices = nil
+	case "backspace", "ctrl+h":
+		if len(m.searchInput) > 0 {
+			runes := []rune(m.searchInput)
+			m.searchInput = string(runes[:len(runes)-1])
+		}
+	default:
+		// Append printable chars
+		if len(msg.Runes) == 1 {
+			m.searchInput += string(msg.Runes)
+		}
+	}
+	return m, nil
+}
+
+func (m CommentModel) updateSearchActive(msg tea.KeyMsg) (CommentModel, tea.Cmd) {
+	switch msg.String() {
+	case "n":
+		if len(m.matchIndices) > 0 {
+			m.matchCursor = (m.matchCursor + 1) % len(m.matchIndices)
+			m.cursor = m.matchIndices[m.matchCursor]
+			m.ensureCursorVisible()
+		}
+	case "N":
+		if len(m.matchIndices) > 0 {
+			m.matchCursor = (m.matchCursor - 1 + len(m.matchIndices)) % len(m.matchIndices)
+			m.cursor = m.matchIndices[m.matchCursor]
+			m.ensureCursorVisible()
+		}
+	case "/":
+		// Re-enter typing mode with current query
+		m.searchMode = searchModeTyping
+		m.searchInput = m.searchQuery
+	case "esc":
+		m.searchMode = searchModeNone
+		m.searchQuery = ""
+		m.matchIndices = nil
+	default:
+		// Allow normal navigation while search is active
+		return m.updateNormal(msg)
+	}
 	return m, nil
 }
 
@@ -180,13 +277,17 @@ func (m CommentModel) View() string {
 		return "\n  Loading comments..."
 	}
 	header := m.headerView()
-	footer := m.footerView()
 	content := m.contentView()
+	footer := m.footerView()
 	return fmt.Sprintf("%s\n%s\n%s", header, content, footer)
 }
 
 func (m CommentModel) headerView() string {
-	title := titleStyle.Render(truncate(m.post.Title, m.width-4))
+	titleText := truncate(m.post.Title, m.width-4)
+	if m.bookmarked {
+		titleText = "★ " + titleText
+	}
+	title := titleStyle.Render(titleText)
 	info := statusBarStyle.Render(fmt.Sprintf("▲ %d  %s  %d comments",
 		m.post.Points, m.post.Author, m.post.CommentCount))
 
@@ -207,7 +308,7 @@ func (m CommentModel) headerView() string {
 		body := commentTextStyle.Render(strings.Join(lines, "\n"))
 		parts = append(parts, "", body)
 		if truncated {
-			parts = append(parts, statusBarStyle.Render("  [b to expand post body...]"))
+			parts = append(parts, statusBarStyle.Render("  [e to expand post body...]"))
 		}
 	}
 
@@ -234,13 +335,36 @@ func (m CommentModel) headerHeight() int {
 }
 
 func (m CommentModel) footerView() string {
+	// Search typing mode: show the input bar
+	if m.searchMode == searchModeTyping {
+		return statusBarStyle.Render(fmt.Sprintf("/%s_  enter confirm • esc cancel", m.searchInput))
+	}
+
 	total := len(m.flat)
 	cur := m.cursor + 1
 	if total == 0 {
 		cur = 0
 	}
+
+	bookmarkStatus := ""
+	if m.bookmarked {
+		bookmarkStatus = " • bookmarked"
+	}
+
+	// Search active mode: show search status
+	if m.searchMode == searchModeActive {
+		matchStatus := "no matches"
+		if len(m.matchIndices) > 0 {
+			matchStatus = fmt.Sprintf("match %d/%d", m.matchCursor+1, len(m.matchIndices))
+		}
+		return statusBarStyle.Render(fmt.Sprintf(
+			"/%s  %s  n/N next/prev • esc clear%s • %d/%d",
+			m.searchQuery, matchStatus, bookmarkStatus, cur, total))
+	}
+
 	return statusBarStyle.Render(fmt.Sprintf(
-		"j/k navigate • c-u/c-d half page • enter/space fold • esc back • o open • %d/%d", cur, total))
+		"j/k navigate • c-u/c-d half page • enter/space fold • esc back • / search%s • %d/%d",
+		bookmarkStatus, cur, total))
 }
 
 func (m CommentModel) contentView() string {
@@ -324,12 +448,83 @@ func (m CommentModel) renderSingleComment(fc flatComment, selected bool, width i
 		}
 		lines := wrapText(fc.comment.Text, maxWidth)
 		for _, line := range lines {
-			b.WriteString(selectIndicator + pipe + indent + commentTextStyle.Render(line) + "\n")
+			rendered := renderLineWithHighlight(line, m.searchQuery)
+			b.WriteString(selectIndicator + pipe + indent + rendered + "\n")
 		}
 	}
 	b.WriteString(selectIndicator + "\n")
 
 	return b.String()
+}
+
+// renderLineWithHighlight renders a text line with search matches highlighted.
+// Non-matching segments use commentTextStyle; matches use searchHighlightStyle.
+func renderLineWithHighlight(line, query string) string {
+	if query == "" {
+		return commentTextStyle.Render(line)
+	}
+	q := strings.ToLower(query)
+	lower := strings.ToLower(line)
+	var result strings.Builder
+	i := 0
+	for {
+		idx := strings.Index(lower[i:], q)
+		if idx == -1 {
+			result.WriteString(commentTextStyle.Render(line[i:]))
+			break
+		}
+		abs := i + idx
+		if abs > i {
+			result.WriteString(commentTextStyle.Render(line[i:abs]))
+		}
+		result.WriteString(searchHighlightStyle.Render(line[abs : abs+len(q)]))
+		i = abs + len(q)
+	}
+	return result.String()
+}
+
+// computeMatches populates matchIndices for all flat comments matching query.
+func (m *CommentModel) computeMatches(query string) {
+	m.matchIndices = nil
+	m.matchCursor = 0
+	if query == "" {
+		return
+	}
+	q := strings.ToLower(query)
+	for i, fc := range m.flat {
+		if strings.Contains(strings.ToLower(fc.comment.Text), q) ||
+			strings.Contains(strings.ToLower(fc.comment.Author), q) {
+			m.matchIndices = append(m.matchIndices, i)
+		}
+	}
+}
+
+// highlightMatches wraps all case-insensitive occurrences of query in text with
+// open/close delimiters. The original case of matched text is preserved.
+// In production the open/close are ANSI escape sequences from lipgloss; in tests
+// they are simple bracket strings for readability.
+func highlightMatches(text, query, open, close string) string {
+	if query == "" {
+		return text
+	}
+	q := strings.ToLower(query)
+	var result strings.Builder
+	lower := strings.ToLower(text)
+	i := 0
+	for {
+		idx := strings.Index(lower[i:], q)
+		if idx == -1 {
+			result.WriteString(text[i:])
+			break
+		}
+		abs := i + idx
+		result.WriteString(text[i:abs])
+		result.WriteString(open)
+		result.WriteString(text[abs : abs+len(query)])
+		result.WriteString(close)
+		i = abs + len(query)
+	}
+	return result.String()
 }
 
 // wrapText wraps s to width characters, splitting on word boundaries.

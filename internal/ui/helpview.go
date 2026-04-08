@@ -68,6 +68,8 @@ var listHelpEntries = []helpEntry{
 	{"enter", "view comments"},
 	{"o", "open in browser"},
 	{"c", "open comments link"},
+	{"b", "toggle bookmark"},
+	{"B", "view bookmarks"},
 	{"tab", "cycle source filter"},
 	{"r", "refresh"},
 	{"s", "settings"},
@@ -79,10 +81,13 @@ var commentHelpEntries = []helpEntry{
 	{"↑/↓  j/k", "navigate comments"},
 	{"ctrl+u / ctrl+d", "half page up/down"},
 	{"enter / space", "fold/unfold thread"},
-	{"b", "expand/collapse post body"},
+	{"e", "expand/collapse post body"},
+	{"b", "toggle bookmark"},
 	{"o", "open in browser"},
 	{"c", "open comments link"},
-	{"esc / q", "back to list"},
+	{"/", "search comments"},
+	{"n / N", "next / prev match"},
+	{"esc", "clear search / back"},
 	{"?", "close help"},
 }
 
@@ -92,5 +97,14 @@ var settingsHelpEntries = []helpEntry{
 	{"d / x", "delete subreddit"},
 	{"t", "cycle sort order"},
 	{"esc", "save & back"},
+	{"?", "close help"},
+}
+
+var bookmarkHelpEntries = []helpEntry{
+	{"↑/↓  j/k", "navigate"},
+	{"o", "open in browser"},
+	{"c", "open comments link"},
+	{"d", "remove bookmark"},
+	{"esc / q", "back to list"},
 	{"?", "close help"},
 }

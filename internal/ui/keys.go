@@ -19,6 +19,8 @@ type keyMap struct {
 	Help       key.Binding
 	Comments   key.Binding
 	ExpandBody key.Binding
+	Bookmark   key.Binding
+	Bookmarks  key.Binding
 }
 
 var keys = keyMap{
@@ -31,8 +33,16 @@ var keys = keyMap{
 		key.WithHelp("c", "comments link"),
 	),
 	ExpandBody: key.NewBinding(
+		key.WithKeys("e"),
+		key.WithHelp("e", "expand post body"),
+	),
+	Bookmark: key.NewBinding(
 		key.WithKeys("b"),
-		key.WithHelp("b", "expand post body"),
+		key.WithHelp("b", "toggle bookmark"),
+	),
+	Bookmarks: key.NewBinding(
+		key.WithKeys("B"),
+		key.WithHelp("B", "view bookmarks"),
 	),
 	Back: key.NewBinding(
 		key.WithKeys("esc"),

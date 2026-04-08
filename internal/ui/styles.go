@@ -29,4 +29,8 @@ var (
 	sourceTagStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF6600")).
 			Bold(true)
+
+	searchHighlightStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("#FFFF00")).
+				Foreground(lipgloss.Color("#000000"))
 )
