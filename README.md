@@ -7,6 +7,10 @@
 
 A beautiful terminal UI for Hacker News and Reddit, built with Go and Bubble Tea.
 
+<p align="center" width="100%">
+<video src="https://github.com/user-attachments/assets/76d957f3-b39f-43ba-868b-0be3412030d3" width="80%" controls></video>
+</p>
+
 ## Features
 
 - **Multi-source:** Aggregates Hacker News and your favorite subreddits.
