@@ -9,6 +9,7 @@ import (
 
 	"technews-tui/internal/bookmark"
 	"technews-tui/internal/browser"
+	"technews-tui/internal/config"
 )
 
 type bookmarkDoneMsg struct{}
@@ -34,9 +35,10 @@ type BookmarkModel struct {
 	store  *bookmark.Store
 	width  int
 	height int
+	cfg    *config.Config
 }
 
-func NewBookmarkModel(store *bookmark.Store) BookmarkModel {
+func NewBookmarkModel(store *bookmark.Store, cfg *config.Config) BookmarkModel {
 	delegate := list.NewDefaultDelegate()
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = "Bookmarks"
@@ -44,7 +46,7 @@ func NewBookmarkModel(store *bookmark.Store) BookmarkModel {
 	l.SetFilteringEnabled(true)
 	l.Styles.Title = titleStyle
 
-	m := BookmarkModel{list: l, store: store}
+	m := BookmarkModel{list: l, store: store, cfg: cfg}
 	m.reloadItems()
 	return m
 }
@@ -98,13 +100,13 @@ func (m BookmarkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if url == "" {
 					url = b.SourceURL
 				}
-				browser.Open(url) //nolint:errcheck
+				browser.Open(m.cfg.Browser, url) //nolint:errcheck
 			}
 			return m, nil
 
 		case key.Matches(msg, keys.Comments):
 			if b := m.SelectedBookmark(); b != nil {
-				browser.Open(b.SourceURL) //nolint:errcheck
+				browser.Open(m.cfg.Browser, b.SourceURL) //nolint:errcheck
 			}
 			return m, nil
 
