@@ -33,4 +33,7 @@ var (
 	searchHighlightStyle = lipgloss.NewStyle().
 				Background(lipgloss.Color("#FFFF00")).
 				Foreground(lipgloss.Color("#000000"))
+
+	visitedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
 )

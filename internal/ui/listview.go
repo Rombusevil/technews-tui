@@ -11,15 +11,22 @@ import (
 
 	"technews-tui/internal/bookmark"
 	"technews-tui/internal/model"
+	"technews-tui/internal/visited"
 )
 
 // postItem wraps model.Post to satisfy list.Item and list.DefaultItem.
 type postItem struct {
 	post       model.Post
 	bookmarked bool
+	visited    bool
 }
 
-func (i postItem) Title() string       { return i.post.Title }
+func (i postItem) Title() string {
+	if i.visited {
+		return visitedStyle.Render(i.post.Title)
+	}
+	return i.post.Title
+}
 func (i postItem) FilterValue() string { return i.post.Title }
 func (i postItem) Description() string {
 	age := timeAgo(i.post.CreatedAt)
@@ -45,19 +52,20 @@ type ListModel struct {
 	list          list.Model
 	posts         []model.Post
 	bookmarkStore *bookmark.Store
+	visitedStore  *visited.Store
 	width         int
 	height        int
 	baseTitle     string
 	sorts         []SortInfo
 }
 
-func NewListModel(store *bookmark.Store) ListModel {
+func NewListModel(store *bookmark.Store, visitedStore *visited.Store) ListModel {
 	delegate := list.NewDefaultDelegate()
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(true)
 	l.Styles.Title = lipgloss.NewStyle() // styles embedded in Title string directly
-	m := ListModel{list: l, baseTitle: "Tech News", bookmarkStore: store}
+	m := ListModel{list: l, baseTitle: "Tech News", bookmarkStore: store, visitedStore: visitedStore}
 	m.updateTitle()
 	return m
 }
@@ -99,7 +107,11 @@ func (m *ListModel) SetPosts(posts []model.Post) {
 		if m.bookmarkStore != nil {
 			bookmarked = m.bookmarkStore.Has(p.SourceURL)
 		}
-		items[i] = postItem{post: p, bookmarked: bookmarked}
+		wasVisited := false
+		if m.visitedStore != nil {
+			wasVisited = m.visitedStore.Has(p.SourceURL)
+		}
+		items[i] = postItem{post: p, bookmarked: bookmarked, visited: wasVisited}
 	}
 	m.list.SetItems(items)
 }

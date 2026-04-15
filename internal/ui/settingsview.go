@@ -164,7 +164,7 @@ func (m SettingsModel) updateBrowseMode(msg tea.KeyMsg) (SettingsModel, tea.Cmd)
 			m.adding = true
 			m.input.SetValue("")
 			m.input.Focus()
-			m.input.Placeholder = fmt.Sprintf("Add %s target", row.sourceID)
+			m.input.Placeholder = fmt.Sprintf("AddOrUpdate %s target", row.sourceID)
 			return m, textinput.Blink
 		}
 	case key.Matches(msg, keys.Delete): // delete target

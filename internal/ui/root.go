@@ -12,6 +12,7 @@ import (
 	"technews-tui/internal/browser"
 	"technews-tui/internal/config"
 	"technews-tui/internal/model"
+	"technews-tui/internal/visited"
 )
 
 type viewState int
@@ -40,6 +41,7 @@ type RootModel struct {
 	settingsModel SettingsModel
 	bookmarkModel BookmarkModel
 	bookmarkStore *bookmark.Store
+	visitedStore  *visited.Store
 	sources       []api.Source
 	cfg           *config.Config
 	allPosts      []model.Post // full unfiltered set
@@ -56,10 +58,14 @@ func NewRootModel(cfg *config.Config) RootModel {
 	store := bookmark.NewStore(bookmark.DefaultPath())
 	_ = store.Load()
 
+	vstore := visited.NewStore(visited.DefaultPath())
+	_ = vstore.Load()
+
 	m := RootModel{
 		state:         stateList,
-		listModel:     NewListModel(store),
+		listModel:     NewListModel(store, vstore),
 		bookmarkStore: store,
+		visitedStore:  vstore,
 		cfg:           cfg,
 		loading:       true,
 	}
@@ -200,6 +206,7 @@ func (m RootModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if post == nil {
 			return m, nil
 		}
+		_ = m.visitedStore.AddOrUpdate(post.SourceURL)
 		m.state = stateComments
 		m.commentModel = NewCommentModel(*post)
 		m.commentModel.SetBookmarked(m.bookmarkStore.Has(post.SourceURL))
@@ -215,7 +222,9 @@ func (m RootModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if url == "" {
 			url = post.SourceURL
 		}
+		_ = m.visitedStore.AddOrUpdate(post.SourceURL)
 		browser.Open(m.cfg.Browser, url) //nolint:errcheck
+		m.listModel.SetPosts(m.allPosts)
 		return m, nil
 
 	case key.Matches(msg, keys.Comments):
@@ -223,7 +232,9 @@ func (m RootModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if post == nil {
 			return m, nil
 		}
+		_ = m.visitedStore.AddOrUpdate(post.SourceURL)
 		browser.Open(m.cfg.Browser, post.SourceURL) //nolint:errcheck
+		m.listModel.SetPosts(m.allPosts)
 		return m, nil
 
 	case key.Matches(msg, keys.Bookmark):
@@ -307,10 +318,12 @@ func (m RootModel) updateComments(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if url == "" {
 			url = m.commentModel.post.SourceURL
 		}
+		_ = m.visitedStore.AddOrUpdate(m.commentModel.post.SourceURL)
 		browser.Open(m.cfg.Browser, url) //nolint:errcheck
 		return m, nil
 
 	case key.Matches(msg, keys.Comments):
+		_ = m.visitedStore.AddOrUpdate(m.commentModel.post.SourceURL)
 		browser.Open(m.cfg.Browser, m.commentModel.post.SourceURL) //nolint:errcheck
 		return m, nil
 
