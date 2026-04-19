@@ -215,7 +215,7 @@ func (m RootModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if url == "" {
 			url = post.SourceURL
 		}
-		browser.Open(url) //nolint:errcheck
+		browser.Open(m.cfg.Browser, url) //nolint:errcheck
 		return m, nil
 
 	case key.Matches(msg, keys.Comments):
@@ -223,7 +223,7 @@ func (m RootModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if post == nil {
 			return m, nil
 		}
-		browser.Open(post.SourceURL) //nolint:errcheck
+		browser.Open(m.cfg.Browser, post.SourceURL) //nolint:errcheck
 		return m, nil
 
 	case key.Matches(msg, keys.Bookmark):
@@ -250,7 +250,7 @@ func (m RootModel) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, keys.Bookmarks):
 		m.state = stateBookmarks
-		m.bookmarkModel = NewBookmarkModel(m.bookmarkStore)
+		m.bookmarkModel = NewBookmarkModel(m.bookmarkStore, m.cfg)
 		m.bookmarkModel.SetSize(m.width, m.height)
 		return m, nil
 
@@ -307,11 +307,11 @@ func (m RootModel) updateComments(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if url == "" {
 			url = m.commentModel.post.SourceURL
 		}
-		browser.Open(url) //nolint:errcheck
+		browser.Open(m.cfg.Browser, url) //nolint:errcheck
 		return m, nil
 
 	case key.Matches(msg, keys.Comments):
-		browser.Open(m.commentModel.post.SourceURL) //nolint:errcheck
+		browser.Open(m.cfg.Browser, m.commentModel.post.SourceURL) //nolint:errcheck
 		return m, nil
 
 	case key.Matches(msg, keys.Bookmark):

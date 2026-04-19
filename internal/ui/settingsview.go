@@ -46,6 +46,7 @@ func NewSettingsModel(cfg *config.Config) SettingsModel {
 	// Deep copy config to allow cancelling
 	newCfg := &config.Config{
 		Sources: make(map[string]config.SourceConfig),
+		Browser: cfg.Browser,
 	}
 	for k, v := range cfg.Sources {
 		sc := config.SourceConfig{

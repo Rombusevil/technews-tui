@@ -2,6 +2,7 @@ package ui
 
 import (
 	"strings"
+	"technews-tui/internal/config"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ func TestBookmarkViewDelete(t *testing.T) {
 	
 	_ = store.Add(b1)
 
-	m := NewBookmarkModel(store)
+	m := NewBookmarkModel(store, &config.Config{})
 	m.SetSize(80, 24)
 
 	// Verify it shows up

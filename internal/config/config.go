@@ -14,9 +14,16 @@ type SourceConfig struct {
 	Targets []string `yaml:"targets,omitempty"` // subreddits, lemmy instances, etc.
 }
 
+// BrowserConfig holds settings for the browser.
+type BrowserConfig struct {
+	Command   string `yaml:"command"`
+	Arguments string `yaml:"arguments"`
+}
+
 // Config holds the application configuration.
 type Config struct {
 	Sources map[string]SourceConfig `yaml:"sources"`
+	Browser *BrowserConfig          `yaml:"browser"`
 }
 
 // Valid sort options per source
